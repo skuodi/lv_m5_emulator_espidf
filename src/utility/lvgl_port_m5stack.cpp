@@ -1,20 +1,21 @@
 #include "lvgl_port_m5stack.hpp"
 
-#if defined(ARDUINO) && defined(ESP_PLATFORM)
+#if defined(ESP_PLATFORM)
+#include "M5Unified.h"
 static SemaphoreHandle_t xGuiSemaphore;
-#elif !defined(ARDUINO) && (__has_include(<SDL2/SDL.h>) || __has_include(<SDL.h>))
+#elif (__has_include(<SDL2/SDL.h>) || __has_include(<SDL.h>))
 static SDL_mutex *xGuiMutex;
 #endif
 
 #ifndef LV_BUFFER_LINE
-#define LV_BUFFER_LINE 120
+#define LV_BUFFER_LINE 240
 #endif
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#if defined(ARDUINO) && defined(ESP_PLATFORM)
+#if defined(ESP_PLATFORM)
 static void lvgl_tick_timer(void *arg) {
     (void)arg;
     lv_tick_inc(10);
@@ -29,7 +30,7 @@ static void lvgl_rtos_task(void *pvParameter) {
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
-#elif !defined(ARDUINO) && (__has_include(<SDL2/SDL.h>) || __has_include(<SDL.h>))
+#elif (__has_include(<SDL2/SDL.h>) || __has_include(<SDL.h>))
 static uint32_t lvgl_tick_timer(uint32_t interval, void *param) {
     (void)interval;
     (void)param;
@@ -80,10 +81,42 @@ static void lvgl_read_cb(lv_indev_drv_t *indev_driver, lv_indev_data_t *data) {
     }
 }
 
+#if defined(ESP_PLATFORM)
+void buttons_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
+{
+    data->state = LV_INDEV_STATE_PRESSED;
+    M5.update();
+
+    if(M5.BtnA.wasPressed())
+    {
+        data->key = LV_KEY_LEFT;
+        if(!lv_group_get_editing(lv_group_get_default()))
+            lv_group_focus_prev(lv_group_get_default());
+        lv_group_send_data(lv_group_get_default(), LV_KEY_LEFT);
+    }
+    else if (M5.BtnB.wasPressed())
+    {
+        data->key = LV_KEY_ENTER;
+        if(!lv_group_get_editing(lv_group_get_default()))
+            lv_event_send(lv_group_get_focused(lv_group_get_default()), LV_EVENT_CLICKED, NULL);
+        lv_group_send_data(lv_group_get_default(), LV_KEY_ENTER);
+    }
+    else if (M5.BtnC.wasPressed())
+    {
+        data->key = LV_KEY_RIGHT;
+        if(!lv_group_get_editing(lv_group_get_default()))
+            lv_group_focus_next(lv_group_get_default());
+        lv_group_send_data(lv_group_get_default(), LV_KEY_RIGHT);
+    }
+    else
+        data->state = LV_INDEV_STATE_RELEASED;
+}
+#endif
+
 void lvgl_port_init(M5GFX &gfx) {
     lv_init();
 
-#if defined(ARDUINO) && defined(ESP_PLATFORM)
+#if defined(ESP_PLATFORM)
 #if defined(BOARD_HAS_PSRAM)
     static lv_color_t *buf1 =
         (lv_color_t *)heap_caps_malloc(gfx.width() * LV_BUFFER_LINE * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
@@ -94,7 +127,7 @@ void lvgl_port_init(M5GFX &gfx) {
     static lv_color_t *buf1 = (lv_color_t *)malloc(gfx.width() * LV_BUFFER_LINE * sizeof(lv_color_t));
     lv_disp_draw_buf_init(&draw_buf, buf1, NULL, gfx.width() * LV_BUFFER_LINE);
 #endif
-#elif !defined(ARDUINO) && (__has_include(<SDL2/SDL.h>) || __has_include(<SDL.h>))
+#elif (__has_include(<SDL2/SDL.h>) || __has_include(<SDL.h>))
     static lv_color_t *buf1 = (lv_color_t *)malloc(gfx.width() * LV_BUFFER_LINE * sizeof(lv_color_t));
     static lv_color_t *buf2 = (lv_color_t *)malloc(gfx.width() * LV_BUFFER_LINE * sizeof(lv_color_t));
     lv_disp_draw_buf_init(&draw_buf, buf1, buf2, gfx.width() * LV_BUFFER_LINE);
@@ -111,23 +144,36 @@ void lvgl_port_init(M5GFX &gfx) {
 
     static lv_indev_drv_t indev_drv;
     lv_indev_drv_init(&indev_drv);
-    indev_drv.type      = LV_INDEV_TYPE_POINTER;
-    indev_drv.read_cb   = lvgl_read_cb;
     indev_drv.user_data = &gfx;
-    lv_indev_t *indev   = lv_indev_drv_register(&indev_drv);
 
-#if defined(ARDUINO) && defined(ESP_PLATFORM)
+#if defined(ESP_PLATFORM)
+    lgfx::boards::board_t board = gfx.getBoard();
+    if(board == lgfx::boards::board_M5StackCore2)
+    {
+        indev_drv.type      = LV_INDEV_TYPE_POINTER;
+        indev_drv.read_cb   = lvgl_read_cb;
+    }
+    else if(board == lgfx::boards::board_M5Stack)
+    {
+        indev_drv.type      = LV_INDEV_TYPE_KEYPAD;
+        indev_drv.read_cb   = buttons_read_cb;
+    }
+
     xGuiSemaphore                                     = xSemaphoreCreateMutex();
     const esp_timer_create_args_t periodic_timer_args = {.callback = &lvgl_tick_timer, .name = "lvgl_tick_timer"};
     esp_timer_handle_t periodic_timer;
     ESP_ERROR_CHECK(esp_timer_create(&periodic_timer_args, &periodic_timer));
     ESP_ERROR_CHECK(esp_timer_start_periodic(periodic_timer, 10 * 1000));
     xTaskCreate(lvgl_rtos_task, "lvgl_rtos_task", 4096, NULL, 1, NULL);
-#elif !defined(ARDUINO) && (__has_include(<SDL2/SDL.h>) || __has_include(<SDL.h>))
+#elif (__has_include(<SDL2/SDL.h>) || __has_include(<SDL.h>))
+    indev_drv.type      = LV_INDEV_TYPE_POINTER;
+    indev_drv.read_cb   = lvgl_read_cb;
+
     xGuiMutex = SDL_CreateMutex();
     SDL_AddTimer(10, lvgl_tick_timer, NULL);
     SDL_CreateThread(lvgl_sdl_thread, "lvgl_sdl_thread", NULL);
 #endif
+    lv_indev_drv_register(&indev_drv);
 }
 #elif LVGL_USE_V9 == 1
 static void lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map) {
@@ -169,7 +215,7 @@ void lvgl_port_init(M5GFX &gfx) {
 
     lv_display_set_driver_data(disp, &gfx);
     lv_display_set_flush_cb(disp, lvgl_flush_cb);
-#if defined(ARDUINO) && defined(ESP_PLATFORM)
+#if defined(ESP_PLATFORM)
 #if defined(BOARD_HAS_PSRAM)
     static uint8_t *buf1 = (uint8_t *)heap_caps_malloc(gfx.width() * LV_BUFFER_LINE, MALLOC_CAP_SPIRAM);
     static uint8_t *buf2 = (uint8_t *)heap_caps_malloc(gfx.width() * LV_BUFFER_LINE, MALLOC_CAP_SPIRAM);
@@ -179,7 +225,7 @@ void lvgl_port_init(M5GFX &gfx) {
     static uint8_t *buf1 = (uint8_t *)malloc(gfx.width() * LV_BUFFER_LINE);
     lv_display_set_buffers(disp, (void *)buf1, NULL, gfx.width() * LV_BUFFER_LINE, LV_DISPLAY_RENDER_MODE_PARTIAL);
 #endif
-#elif !defined(ARDUINO) && (__has_include(<SDL2/SDL.h>) || __has_include(<SDL.h>))
+#elif (__has_include(<SDL2/SDL.h>) || __has_include(<SDL.h>))
     static uint8_t *buf1 = (uint8_t *)malloc(gfx.width() * LV_BUFFER_LINE * 2);
     static uint8_t *buf2 = (uint8_t *)malloc(gfx.width() * LV_BUFFER_LINE * 2);
     lv_display_set_buffers(disp, (void *)buf1, (void *)buf2, gfx.width() * LV_BUFFER_LINE * 2,
@@ -197,14 +243,14 @@ void lvgl_port_init(M5GFX &gfx) {
     lv_indev_set_read_cb(indev, lvgl_read_cb);
     lv_indev_set_display(indev, disp);
 
-#if defined(ARDUINO) && defined(ESP_PLATFORM)
+#if defined(ESP_PLATFORM)
     xGuiSemaphore                                     = xSemaphoreCreateMutex();
     const esp_timer_create_args_t periodic_timer_args = {.callback = &lvgl_tick_timer, .name = "lvgl_tick_timer"};
     esp_timer_handle_t periodic_timer;
     ESP_ERROR_CHECK(esp_timer_create(&periodic_timer_args, &periodic_timer));
     ESP_ERROR_CHECK(esp_timer_start_periodic(periodic_timer, 10 * 1000));
     xTaskCreate(lvgl_rtos_task, "lvgl_rtos_task", 4096, NULL, 1, NULL);
-#elif !defined(ARDUINO) && (__has_include(<SDL2/SDL.h>) || __has_include(<SDL.h>))
+#elif (__has_include(<SDL2/SDL.h>) || __has_include(<SDL.h>))
     xGuiMutex = SDL_CreateMutex();
     SDL_AddTimer(10, lvgl_tick_timer, NULL);
     SDL_CreateThread(lvgl_sdl_thread, "lvgl_sdl_thread", NULL);
@@ -213,17 +259,17 @@ void lvgl_port_init(M5GFX &gfx) {
 #endif
 
 bool lvgl_port_lock(void) {
-#if defined(ARDUINO) && defined(ESP_PLATFORM)
+#if defined(ESP_PLATFORM)
     return xSemaphoreTake(xGuiSemaphore, portMAX_DELAY) == pdTRUE ? true : false;
-#elif !defined(ARDUINO) && (__has_include(<SDL2/SDL.h>) || __has_include(<SDL.h>))
+#elif (__has_include(<SDL2/SDL.h>) || __has_include(<SDL.h>))
     return SDL_LockMutex(xGuiMutex) == 0 ? true : false;
 #endif
 }
 
 void lvgl_port_unlock(void) {
-#if defined(ARDUINO) && defined(ESP_PLATFORM)
+#if defined(ESP_PLATFORM)
     xSemaphoreGive(xGuiSemaphore);
-#elif !defined(ARDUINO) && (__has_include(<SDL2/SDL.h>) || __has_include(<SDL.h>))
+#elif (__has_include(<SDL2/SDL.h>) || __has_include(<SDL.h>))
     SDL_UnlockMutex(xGuiMutex);
 #endif
 }

@@ -1,3 +1,42 @@
+# lv_m5_emulator_espidf
+This repo is a fork of [m5stack/lv_m5_emulator](https://github.com/m5stack/lv_m5_emulator) that's been ported to [Espressif IDF](https://github.com/espressif/esp-idf) from the [arduino-esp32](https://github.com/espressif/arduino-esp32) framework used in the `m5stack/lv_m5_emulator` repo, while maintaining PlatformIO compatibility.
+As this fork is meant to remain a template for projects that use M5Stack devices, only the bare minimum of changes required to run on ESP-IDF have been made to this fork, though a few optimizations have been made to improve the user experience on hardware.
+
+Tested on
+- [M5Core2](https://docs.m5stack.com/en/core/core2) - functionally complete
+- [M5Fire](https://docs.m5stack.com/en/core/fire) - needs custom event handlers in UI to receive input device events
+
+Here are a few notes on the changes made in switching to ESP-IDF:
+
+1. In [platformio.ini](platformio.ini), under the non-emulator build targets ([board_M5Core](platformio.ini#L90), [board_M5Core2](platformio.ini#L90), [emulator_CoreS3](platformio.ini#L120)) changed the `framework` from ` arduino` to `espidf` and added `m5stack/M5Unified` under library dependencies to implement optional button input support.
+Optionally, add `esp32_exception_decoder` to the `monitor_filters` to parse the [backtrace](https://docs.espressif.com/projects/esp-techpedia/en/latest/esp-friends/advanced-development/debugging/backtrace-coredump.html) into meaningful output the event of a crash. Also configure the UART `monitor_speed` that the platformio terminal expects the device to be running at: the actual UART baud rate that the M5Stack hardware will use is configured in [menuconfig](https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/kconfig.html).
+
+2. In [main.cpp](src/main.cpp)
+  - change all occurances of `#if defined(ARDUINO) && defined(ESP_PLATFORM)` to `#if defined(ESP_PLATFORM)`
+  - include the [M5Unified header](src/main.cpp#L7) for input device support.
+  - implement [app_main()](src/main.cpp#L28) which will be the entry point of the application. Note that `app_main()` [needs to be declared `extern "C" ` if implemented within a .cpp file](https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-guides/cplusplus.html)
+  - optionally call `M5.begin()` to initialize input devices
+
+3. In [lv_conf_v8.h](include/lv_conf_v8.h)
+  - enable [LV_MEM_CUSTOM](include/lv_conf_v8.h#L49) for lvgl to use external PSRAM available on all M5Stack cores. PSRAM will be enabled in menuconfig
+  - optionally, enable the [lvgl performance monitor](include/lv_conf_v8.h#L271) to see the real-time CPU usage and FPS count on screen.
+
+4. In the platformio tab, under Project Tasks run `[build targets]` > `Platform` > `Run menuconfig` for each of the non-emulator build targets ([board_M5Core](platformio.ini#L90), [board_M5Core2](platformio.ini#L90), [emulator_CoreS3](platformio.ini#L120)). Set:
+  - `Bootloader config` > `Bootloader log verbosity` to `Warning` or lower. Setting it to `Info` or higher inflates the bootloader size and it won't fit in to the space allocated on flash;
+  - `Serial flasher config` > `Flash size` to `16 MB`
+  - `Partition Table` > `Custom partition table CSV` enabled. The current [partitions.csv](partitions.csv) is for 16MB flash taken as-is from the [arduin-esp32 repo](https://github.com/espressif/arduino-esp32/blob/master/tools/partitions/m5stack_partitions_16MB_factory_4_apps.csv)
+  - `Component config` > `ESP PSRAM` > `Support for external, SPI-connected RAM` enabled
+  - optionally, `Component config` > `ESP System Settings` > `Channel for console output` to `Custom UART` to show the `UART console baud rate` option which you can set to the save value as in platformio.ini (step 1).
+
+5. In [lvgl_port_m5stack.cpp](src/utility/lvgl_port_m5stack.cpp)
+  - change all occurances of `#if defined(ARDUINO) && defined(ESP_PLATFORM)` to `#if defined(ESP_PLATFORM)`
+  - optionally, include [M5Unified.h](src/utility/lvgl_port_m5stack.cpp#L4) to implement input device supportand implement read callback for [button](src/utility/lvgl_port_m5stack.cpp#L85) inputs
+  - [register the input devices](src/utility/lvgl_port_m5stack.cpp#L161-L190)
+  - optionally, set the frame buffer height `LV_BUFFER_LINE` to the size of the display to mitigate the tearing effect. M5Stack cores have >=4MB onboard PSRAM which is more than enough to for 2 fullscreen buffers.
+
+
+## <-----------------------------------------------ORIGINAL README----------------------------------------------->
+
 # Running the M5Stack LVGL device emulator via PlatformIO
 
 Now it is more convenient to design [LVGL](https://github.com/lvgl/lvgl) UI on PC, 
